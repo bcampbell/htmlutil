@@ -17,6 +17,7 @@ func TestRenderNode(t *testing.T) {
 		{"<p>Hello</p><p>there.</p>", "Hello\nthere.\n"},
 		{"<p><em>Hello</em> there.</p>", "Hello there.\n"},
 		{`<p><span class="cap">T</span>he cat sat on the mat.</p>`, "The cat sat on the mat.\n"},
+		{`Fish &amp; chips`, "Fish & chips"},
 	}
 
 	for _, dat := range testData {
@@ -29,7 +30,7 @@ func TestRenderNode(t *testing.T) {
 			got += RenderNode(node)
 		}
 		if got != dat.expected {
-			t.Errorf("RenderNode(`%s`) got `%s` (expected `%s`)", dat.htmlFragment, got, dat.expected)
+			t.Errorf("RenderNode(%q) got %q (expected %q)", dat.htmlFragment, got, dat.expected)
 		}
 	}
 }
