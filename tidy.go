@@ -1,0 +1,196 @@
+package htmlutil
+
+import (
+	"github.com/andybalholm/cascadia"
+	"golang.org/x/net/html"
+	"golang.org/x/net/html/atom"
+	"regexp"
+	"strings"
+)
+
+// a list of allowed elements and their allowed attrs
+// all missing elements or attrs should be stripped
+var elementWhitelist = map[atom.Atom][]atom.Atom{
+	// basing on list at  https://developer.mozilla.org/en-US/docs/Web/Guide/HTML/HTML5/HTML5_element_list
+
+	//Sections
+	atom.Section: {},
+	// atom.Nav?
+	atom.Article: {},
+	atom.Aside:   {},
+	atom.H1:      {},
+	atom.H2:      {},
+	atom.H3:      {},
+	atom.H4:      {},
+	atom.H5:      {},
+	atom.H6:      {},
+	atom.Header:  {}, // should disallow?
+	atom.Footer:  {}, // should disallow?
+	atom.Address: {},
+	//atom.Main?
+
+	// Grouping content
+	atom.P:          {},
+	atom.Hr:         {},
+	atom.Pre:        {},
+	atom.Blockquote: {},
+	atom.Ol:         {},
+	atom.Ul:         {},
+	atom.Li:         {},
+	atom.Dl:         {},
+	atom.Dt:         {},
+	atom.Dd:         {},
+	atom.Figure:     {},
+	atom.Figcaption: {},
+	atom.Div:        {},
+
+	// Text-level semantics
+	atom.A:      {atom.Href},
+	atom.Em:     {},
+	atom.Font:   {},
+	atom.Strong: {},
+	atom.Small:  {},
+	atom.S:      {},
+	atom.Cite:   {},
+	atom.Q:      {},
+	atom.Dfn:    {},
+	atom.Abbr:   {atom.Title},
+	// atom.Data
+	atom.Time: {atom.Datetime},
+	atom.Code: {},
+	atom.Var:  {},
+	atom.Samp: {},
+	atom.Kbd:  {},
+	atom.Sub:  {},
+	atom.Sup:  {},
+	atom.I:    {},
+	atom.B:    {},
+	atom.U:    {},
+	atom.Mark: {},
+	atom.Ruby: {},
+	atom.Rt:   {},
+	atom.Rp:   {},
+	atom.Bdi:  {},
+	atom.Bdo:  {},
+	atom.Span: {},
+	atom.Br:   {},
+	atom.Wbr:  {},
+
+	// Edits
+	atom.Ins: {},
+	atom.Del: {},
+
+	//Embedded content
+	atom.Img: {atom.Src, atom.Alt},
+	// atom.Video?
+	// atom.Audio?
+	// atom.Map?
+	// atom.Area?
+	// atom.Svg?
+	// atom.Math?
+
+	// Tabular data
+	atom.Table:    {},
+	atom.Caption:  {},
+	atom.Colgroup: {},
+	atom.Col:      {},
+	atom.Tbody:    {},
+	atom.Thead:    {},
+	atom.Tfoot:    {},
+	atom.Tr:       {},
+	atom.Td:       {},
+	atom.Th:       {},
+
+	// Forms
+
+	// Interactive elements
+
+}
+
+func filterAttrs(n *html.Node, fn func(*html.Attribute) bool) {
+	var out = make([]html.Attribute, 0)
+	for _, a := range n.Attr {
+		if fn(&a) {
+			out = append(out, a)
+		}
+	}
+	n.Attr = out
+}
+
+// Sanitise HTML
+// - filter eleements and sttrs
+// - remove comments
+// - trim empty text nodes
+// - TODO make links absolute
+func Sanitise(node *html.Node) {
+	var commentSel cascadia.Selector = func(n *html.Node) bool {
+		return n.Type == html.CommentNode
+	}
+	var textSel cascadia.Selector = func(n *html.Node) bool {
+		return n.Type == html.TextNode
+	}
+	var elementSel cascadia.Selector = func(n *html.Node) bool {
+		return n.Type == html.ElementNode
+	}
+	var imgSel cascadia.Selector = func(n *html.Node) bool {
+		return n.Type == html.ElementNode && n.DataAtom == atom.Img
+	}
+
+	// remove all comments
+	for _, n := range commentSel.MatchAll(node) {
+		n.Parent.RemoveChild(n)
+	}
+
+	leadingSpace := regexp.MustCompile(`^\s+`)
+	trailingSpace := regexp.MustCompile(`\s+$`)
+	// trim excessive leading/trailing space in text nodes, and cull empty ones
+	for _, n := range textSel.MatchAll(node) {
+		txt := leadingSpace.ReplaceAllStringFunc(n.Data, func(in string) string {
+			if strings.Contains(in, "\n") {
+				return "\n"
+			} else {
+				return " "
+			}
+		})
+		txt = trailingSpace.ReplaceAllStringFunc(n.Data, func(in string) string {
+			if strings.Contains(in, "\n") {
+				return "\n"
+			} else {
+				return " "
+			}
+		})
+		if len(strings.TrimSpace(txt)) == 0 {
+			n.Parent.RemoveChild(n)
+		} else {
+			n.Data = txt
+		}
+	}
+
+	// remove any elements or attrs not on the whitelist
+	for _, n := range elementSel.MatchAll(node) {
+		allowedAttrs, whiteListed := elementWhitelist[n.DataAtom]
+		if !whiteListed {
+			n.Parent.RemoveChild(n)
+			continue
+		}
+		filterAttrs(n, func(attr *html.Attribute) bool {
+			for _, allowed := range allowedAttrs {
+				if attr.Key == allowed.String() {
+					return true
+				}
+			}
+			return false
+		})
+	}
+
+	// special pass for images - strip out ones with huge URIs (eg embedded
+	// 'data:' + base64 encoded images)
+	const maxSrcURI = 1024
+	for _, img := range imgSel.MatchAll(node) {
+		src := GetAttr(img, "src")
+		if len(src) > maxSrcURI {
+			img.Parent.RemoveChild(img)
+			continue
+		}
+	}
+}
